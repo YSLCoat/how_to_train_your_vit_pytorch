@@ -7,3 +7,6 @@ dist/
 venv/
 .env/
 .pyc/
+utils/__pycache__/training_utils.cpython-311.pyc
+utils/__pycache__/training_utils.cpython-311.pyc
+utils/__pycache__/__init__.cpython-311.pyc

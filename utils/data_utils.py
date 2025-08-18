@@ -3,6 +3,7 @@ import pathlib
 import logging
 from PIL import Image
 from typing import Tuple, Dict, List
+import xml.etree.ElementTree as ET
 
 import torch
 import torch.utils.data
@@ -11,9 +12,11 @@ from torch.utils.data import (
     default_collate
 )
 import torch.utils.data.distributed
+import torchvision
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from torchvision.transforms import v2
+
 
 logger = logging.getLogger()
 
@@ -21,40 +24,86 @@ class ImageNetDataset(Dataset):
     """
     Custom imagenet dataset class. Expects the following file structure
     root_dir/
-    ├── train/
-    │   ├── class_a/
-    │   │   ├── xxx.jpeg
-    │   │   └── ...
-    │   └── class_b/
-    └── val/
+    ├── Data/
+    │   └── CLS-LOC /
+    │       ├── train /
+    |       |   └── class_folders /
+    |       |       └── filename.JPEG 
+    |       |
+    │       └── val /...
+    │   
+    └── Annotations/
+        └── CLS-LOC /
+            ├── train /
+            |   └── class_folders /
+            |       └── filename.xml 
+            └── val /...
     """
-    def __init__(self, root_dir: str, partition:str='train', transform=None) -> None:
-        self.targ_dir = pathlib.Path(os.path.join(root_dir, partition))
-        self.paths = [f for f in self.targ_dir.rglob('*') if f.suffix.lower() in ['.jpg', '.png', '.jpeg']]
+    # img path: root folder -> Data -> CLS-LOC -> test/train/val -> class_folders -> filename.JPEG
+    # annotation path: root folder -> Annotations -> CLS-LOC -> train/val -> class_folders -> filename.xml
+    def __init__(self, root_dir: str, partition:str='train', transforms=None, object_detection=False) -> None:
+        self.img_dir = pathlib.Path(os.path.join(root_dir, 'Data', 'CLS-LOC', partition))
+        self.object_detection = object_detection
+        if object_detection:
+            self.annotation_dir = pathlib.Path(os.path.join(root_dir, 'Annotations', 'CLS-LOC', partition))
+            self.annotation_paths = [f for f in self.annotation_dir.rglob('*') if f.suffix.lower() == '.xml'] 
+            self.img_paths = []
+
+            for path in self.annotation_paths:
+                path_parts = list(path.parts)
+                data_index = path_parts.index('Annotations')
+                path_parts[data_index] = 'Data'
+                img_base_path = pathlib.Path(*path_parts)
+                self.img_paths.append(img_base_path.with_suffix('.JPEG'))                
+        else:
+            self.img_paths = [f for f in self.img_dir.rglob('*') if f.suffix.lower() == '.JPEG'] 
+
         self.readable_classes_dict = extract_readable_imagenet_labels(os.path.join(root_dir, 'LOC_synset_mapping.txt'))
-        self.transform = transform
-        self.classes, self.class_to_idx = find_classes(self.targ_dir, self.readable_classes_dict)
+        self.transforms = transforms
+        self.classes, self.class_to_idx = find_classes(self.img_dir, self.readable_classes_dict)
 
     def load_image(self, index: int) -> Image.Image:
         "Opens an image via a path and returns it."
-        image_path = self.paths[index]
+        image_path = self.img_paths[index]
         return Image.open(image_path).convert('RGB') 
+    
+    def load_bounding_box_coords(self, index:int, img_size:Tuple) -> torch.Tensor:
+        annotation_path = self.annotation_paths[index]
+        tree = ET.parse(annotation_path)
+        root = tree.getroot()
+        bndbox = root.find(".//bndbox")
+        xmin = int(bndbox.find("xmin").text)
+        ymin = int(bndbox.find("ymin").text)
+        xmax = int(bndbox.find("xmax").text)
+        ymax = int(bndbox.find("ymax").text)
+
+        return torchvision.tv_tensors.BoundingBoxes([[xmin, ymin, xmax, ymax]], format='XYXY', canvas_size=img_size)
+        
     
     def __len__(self) -> int:
         "Returns the total number of samples."
-        return len(self.paths)
+        return len(self.img_paths)
     
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, int]:
         "Returns one sample of data, data and label (X, y)."
         img = self.load_image(index)
-        class_name = self.paths[index].parent.name # expects path in data_folder/class_name/image.jpeg
+        class_name = self.img_paths[index].parent.name # expects path in data_folder/class_name/image.jpeg
         readable_class_name = self.readable_classes_dict[class_name]
         class_idx = self.class_to_idx[readable_class_name]
 
-        if self.transform:
-            return self.transform(img), class_idx
+        if self.object_detection:
+            H, W = img.height, img.width
+            bndbox_coords_tensor = self.load_bounding_box_coords(index, (H, W))
+
+            if self.transforms:
+                return self.transforms({'image': img, 'boxes': bndbox_coords_tensor, 'labels': torch.tensor([class_idx])})
+            else:
+                return img, bndbox_coords_tensor, class_idx
         else:
-            return img, class_idx
+            if self.transforms:
+                return self.transforms(img), class_idx
+            else:
+                return img, class_idx
         
 
 class MixUpCollator:
