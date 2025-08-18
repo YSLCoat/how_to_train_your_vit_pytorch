@@ -56,7 +56,7 @@ class ImageNetDataset(Dataset):
                 img_base_path = pathlib.Path(*path_parts)
                 self.img_paths.append(img_base_path.with_suffix('.JPEG'))                
         else:
-            self.img_paths = [f for f in self.img_dir.rglob('*') if f.suffix.lower() == '.JPEG'] 
+            self.img_paths = [f for f in self.img_dir.rglob('*') if f.suffix == '.JPEG']
 
         self.readable_classes_dict = extract_readable_imagenet_labels(os.path.join(root_dir, 'LOC_synset_mapping.txt'))
         self.transforms = transforms
