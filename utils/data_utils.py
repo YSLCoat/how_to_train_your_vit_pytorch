@@ -42,7 +42,7 @@ class ImageNetDataset(Dataset):
     # img path: root folder -> Data -> CLS-LOC -> test/train/val -> class_folders -> filename.JPEG
     # annotation path: root folder -> Annotations -> CLS-LOC -> train/val -> class_folders -> filename.xml
     def __init__(self, root_dir: str, partition:str='train', transforms=None, object_detection=False) -> None:
-        self.img_dir = pathlib.Path(os.path.join(root_dir, 'Data', 'CLS-LOC', partition))
+        self.img_dir = pathlib.Path(os.path.join(root_dir, 'ILSVRC', 'Data', 'CLS-LOC', partition))
         self.object_detection = object_detection
         if object_detection:
             self.annotation_dir = pathlib.Path(os.path.join(root_dir, 'Annotations', 'CLS-LOC', partition))

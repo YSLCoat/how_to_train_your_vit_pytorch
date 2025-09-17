@@ -18,11 +18,13 @@ from torch.optim.lr_scheduler import (
 from torch.utils.data import Subset
 
 from utils.training_utils import (
-    save_checkpoint,
     AverageMeter,
     ProgressMeter,
-    Summary
+    Summary,
+    save_checkpoint,
+    load_checkpoint
 )
+from model_utils import configure_multi_gpu_model
 from utils.data_utils import build_data_loaders
 from input_parser import build_config
 from metrics import accuracy
@@ -104,25 +106,8 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if not use_accel:
         logging.info('using CPU, this will be slow')
-    elif args.distributed:
-        if device.type == 'cuda':
-            if args.gpu is not None:
-                torch.cuda.set_device(args.gpu)
-                model.cuda(device)
-                args.batch_size = int(args.batch_size / ngpus_per_node)
-                args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
-                model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
-            else:
-                model.cuda()
-                model = torch.nn.parallel.DistributedDataParallel(model)
-    elif device.type == 'cuda':
-        if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
-            model.features = torch.nn.DataParallel(model.features)
-            model.cuda()
-        else:
-            model = torch.nn.DataParallel(model).cuda()
     else:
-        model.to(device)
+        configure_multi_gpu_model(args, model, device, ngpus_per_node)
     
     train_loader, val_loader, train_sampler, _ = build_data_loaders(args)
     
@@ -152,26 +137,7 @@ def main_worker(gpu, ngpus_per_node, args):
     )
 
     if args.resume:
-        if os.path.isfile(args.resume):
-            logging.info("=> loading checkpoint '{}'".format(args.resume))
-            if args.gpu is None:
-                checkpoint = torch.load(args.resume)
-            else:
-                # Map model to be loaded to specified single gpu.
-                loc = f'{device.type}:{args.gpu}'
-                checkpoint = torch.load(args.resume, map_location=loc)
-            args.start_epoch = checkpoint['epoch']
-            best_acc1 = checkpoint['best_acc1']
-            if args.gpu is not None:
-                # best_acc1 may be from a checkpoint from a different GPU
-                best_acc1 = best_acc1.to(args.gpu)
-            model.load_state_dict(checkpoint['state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            scheduler.load_state_dict(checkpoint['scheduler'])
-            logging.info("=> loaded checkpoint '{}' (epoch {})"
-                  .format(args.resume, checkpoint['epoch']))
-        else:
-            logging.info("=> no checkpoint found at '{}'".format(args.resume))
+        load_checkpoint(args, device, model, optimizer, scheduler)
 
     if args.evaluate:
         validate(val_loader, model, criterion, args)

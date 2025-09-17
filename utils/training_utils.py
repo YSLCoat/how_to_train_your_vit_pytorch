@@ -1,4 +1,6 @@
 import shutil
+import os
+import logging
 from enum import Enum
 
 import torch
@@ -89,3 +91,24 @@ class ProgressMeter(object):
         num_digits = len(str(num_batches // 1))
         fmt = '{:' + str(num_digits) + 'd}'
         return '[' + fmt + '/' + fmt.format(num_batches) + ']'
+    
+
+def load_checkpoint(args, device, model, optimizer, scheduler) -> None:
+    if os.path.isfile(args.resume):
+            logging.info("=> loading checkpoint '{}'".format(args.resume))
+            if args.gpu is None:
+                checkpoint = torch.load(args.resume)
+            else:
+                loc = f'{device.type}:{args.gpu}'
+                checkpoint = torch.load(args.resume, map_location=loc)
+            args.start_epoch = checkpoint['epoch']
+            best_acc1 = checkpoint['best_acc1']
+            if args.gpu is not None:
+                best_acc1 = best_acc1.to(args.gpu)
+            model.load_state_dict(checkpoint['state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            scheduler.load_state_dict(checkpoint['scheduler'])
+            logging.info("=> loaded checkpoint '{}' (epoch {})"
+                  .format(args.resume, checkpoint['epoch']))
+    else:
+        logging.info("=> no checkpoint found at '{}'".format(args.resume))
