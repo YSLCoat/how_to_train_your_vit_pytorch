@@ -7,10 +7,10 @@ import torch
 import torch.distributed as dist
 
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+def save_checkpoint(state, is_best, filename="checkpoint.pth.tar"):
     torch.save(state, filename)
     if is_best:
-        shutil.copyfile(filename, 'model_best.pth.tar')
+        shutil.copyfile(filename, "model_best.pth.tar")
 
 
 class Summary(Enum):
@@ -22,7 +22,8 @@ class Summary(Enum):
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
-    def __init__(self, name, use_accel, fmt=':f', summary_type=Summary.AVERAGE):
+
+    def __init__(self, name, use_accel, fmt=":f", summary_type=Summary.AVERAGE):
         self.name = name
         self.use_accel = use_accel
         self.fmt = fmt
@@ -41,7 +42,7 @@ class AverageMeter(object):
         self.count += n
         self.avg = self.sum / self.count
 
-    def all_reduce(self):    
+    def all_reduce(self):
         if self.use_accel:
             device = torch.accelerator.current_accelerator()
         else:
@@ -52,22 +53,22 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
     def __str__(self):
-        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
+        fmtstr = "{name} {val" + self.fmt + "} ({avg" + self.fmt + "})"
         return fmtstr.format(**self.__dict__)
-    
+
     def summary(self):
-        fmtstr = ''
+        fmtstr = ""
         if self.summary_type is Summary.NONE:
-            fmtstr = ''
+            fmtstr = ""
         elif self.summary_type is Summary.AVERAGE:
-            fmtstr = '{name} {avg:.3f}'
+            fmtstr = "{name} {avg:.3f}"
         elif self.summary_type is Summary.SUM:
-            fmtstr = '{name} {sum:.3f}'
+            fmtstr = "{name} {sum:.3f}"
         elif self.summary_type is Summary.COUNT:
-            fmtstr = '{name} {count:.3f}'
+            fmtstr = "{name} {count:.3f}"
         else:
-            raise ValueError('invalid summary type %r' % self.summary_type)
-        
+            raise ValueError("invalid summary type %r" % self.summary_type)
+
         return fmtstr.format(**self.__dict__)
 
 
@@ -80,35 +81,38 @@ class ProgressMeter(object):
     def display(self, batch):
         entries = [self.prefix + self.batch_fmtstr.format(batch)]
         entries += [str(meter) for meter in self.meters]
-        print('\t'.join(entries))
-        
+        print("\t".join(entries))
+
     def display_summary(self):
         entries = [" *"]
         entries += [meter.summary() for meter in self.meters]
-        print(' '.join(entries))
+        print(" ".join(entries))
 
     def _get_batch_fmtstr(self, num_batches):
         num_digits = len(str(num_batches // 1))
-        fmt = '{:' + str(num_digits) + 'd}'
-        return '[' + fmt + '/' + fmt.format(num_batches) + ']'
-    
+        fmt = "{:" + str(num_digits) + "d}"
+        return "[" + fmt + "/" + fmt.format(num_batches) + "]"
+
 
 def load_checkpoint(args, device, model, optimizer, scheduler) -> None:
     if os.path.isfile(args.resume):
-            logging.info("=> loading checkpoint '{}'".format(args.resume))
-            if args.gpu is None:
-                checkpoint = torch.load(args.resume)
-            else:
-                loc = f'{device.type}:{args.gpu}'
-                checkpoint = torch.load(args.resume, map_location=loc)
-            args.start_epoch = checkpoint['epoch']
-            best_acc1 = checkpoint['best_acc1']
-            if args.gpu is not None:
-                best_acc1 = best_acc1.to(args.gpu)
-            model.load_state_dict(checkpoint['state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            scheduler.load_state_dict(checkpoint['scheduler'])
-            logging.info("=> loaded checkpoint '{}' (epoch {})"
-                  .format(args.resume, checkpoint['epoch']))
+        logging.info("=> loading checkpoint '{}'".format(args.resume))
+        if args.gpu is None:
+            checkpoint = torch.load(args.resume)
+        else:
+            loc = f"{device.type}:{args.gpu}"
+            checkpoint = torch.load(args.resume, map_location=loc)
+        args.start_epoch = checkpoint["epoch"]
+        best_acc1 = checkpoint["best_acc1"]
+        if args.gpu is not None:
+            best_acc1 = best_acc1.to(args.gpu)
+        model.load_state_dict(checkpoint["state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        scheduler.load_state_dict(checkpoint["scheduler"])
+        logging.info(
+            "=> loaded checkpoint '{}' (epoch {})".format(
+                args.resume, checkpoint["epoch"]
+            )
+        )
     else:
         logging.info("=> no checkpoint found at '{}'".format(args.resume))

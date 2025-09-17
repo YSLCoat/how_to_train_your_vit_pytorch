@@ -3,9 +3,7 @@ import torchvision
 from torchvision.transforms import v2
 from torch.utils.data import default_collate
 
-AUGMENTATIONS = {
-
-}
+AUGMENTATIONS = {}
 
 # normalize = v2.Normalize(mean=[0.485, 0.456, 0.406],
 #                                      std=[0.229, 0.224, 0.225])
@@ -32,6 +30,7 @@ AUGMENTATIONS = {
 #                 v2.ToTensor(),
 #                 normalize,
 #             ])
+
 
 class MixUpCollator:
     def __init__(self, num_classes):

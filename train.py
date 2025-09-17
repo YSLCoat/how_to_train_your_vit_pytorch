@@ -12,9 +12,7 @@ import torch.nn as nn
 import torch.nn.parallel
 import torch.optim
 import torch.utils.data
-from torch.optim.lr_scheduler import (
-    LinearLR, CosineAnnealingLR, SequentialLR
-)
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 from torch.utils.data import Subset
 
 from utils.training_utils import (
@@ -22,15 +20,13 @@ from utils.training_utils import (
     ProgressMeter,
     Summary,
     save_checkpoint,
-    load_checkpoint
+    load_checkpoint,
 )
 from model_utils import configure_multi_gpu_model
 from utils.data_utils import build_data_loaders
 from input_parser import build_config
 from metrics import accuracy
-from models import (
-    create_model
-)
+from models import create_model
 
 logger = logging.getLogger()
 best_acc1 = 0
@@ -42,15 +38,19 @@ def main(args):
         torch.manual_seed(args.seed)
         cudnn.deterministic = True
         cudnn.benchmark = False
-        warnings.warn('You have chosen to seed training. '
-                      'This will turn on the CUDNN deterministic setting, '
-                      'which can slow down your training considerably! '
-                      'You may see unexpected behavior when restarting '
-                      'from checkpoints.')
+        warnings.warn(
+            "You have chosen to seed training. "
+            "This will turn on the CUDNN deterministic setting, "
+            "which can slow down your training considerably! "
+            "You may see unexpected behavior when restarting "
+            "from checkpoints."
+        )
 
     if args.gpu is not None:
-        warnings.warn('You have chosen a specific GPU. This will completely '
-                      'disable data parallelism.')
+        warnings.warn(
+            "You have chosen a specific GPU. This will completely "
+            "disable data parallelism."
+        )
 
     if args.dist_url == "env://" and args.world_size == -1:
         args.world_size = int(os.environ["WORLD_SIZE"])
@@ -66,10 +66,12 @@ def main(args):
 
     logging.info(f"Using device: {device}")
 
-    if device.type =='cuda':
+    if device.type == "cuda":
         ngpus_per_node = torch.accelerator.device_count()
         if ngpus_per_node == 1 and args.dist_backend == "nccl":
-            warnings.warn("nccl backend >=2.5 requires GPU count>1, see https://github.com/NVIDIA/nccl/issues/103 perhaps use 'gloo'")
+            warnings.warn(
+                "nccl backend >=2.5 requires GPU count>1, see https://github.com/NVIDIA/nccl/issues/103 perhaps use 'gloo'"
+            )
     else:
         ngpus_per_node = 1
 
@@ -98,42 +100,43 @@ def main_worker(gpu, ngpus_per_node, args):
             args.rank = int(os.environ["RANK"])
         if args.multiprocessing_distributed:
             args.rank = args.rank * ngpus_per_node + gpu
-        dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
-                                world_size=args.world_size, rank=args.rank)
-    
+        dist.init_process_group(
+            backend=args.dist_backend,
+            init_method=args.dist_url,
+            world_size=args.world_size,
+            rank=args.rank,
+        )
+
     logging.info("=> creating model '{}'".format(args.arch))
     model = create_model(args)
 
     if not use_accel:
-        logging.info('using CPU, this will be slow')
+        logging.info("using CPU, this will be slow")
     else:
         configure_multi_gpu_model(args, model, device, ngpus_per_node)
-    
+
     train_loader, val_loader, train_sampler, _ = build_data_loaders(args)
-    
+
     criterion = nn.CrossEntropyLoss().to(device)
 
     total_steps = len(train_loader) * args.epochs
 
-    optimizer = torch.optim.AdamW(model.parameters(), args.lr,
-                                weight_decay=args.weight_decay)
-    
+    optimizer = torch.optim.AdamW(
+        model.parameters(), args.lr, weight_decay=args.weight_decay
+    )
+
     main_scheduler = CosineAnnealingLR(
-        optimizer,
-        T_max = total_steps - args.warmup_period,
-        eta_min = 1e-6
+        optimizer, T_max=total_steps - args.warmup_period, eta_min=1e-6
     )
 
     warmup_scheduler = LinearLR(
-        optimizer,
-        start_factor = 0.01,
-        total_iters = args.warmup_period
+        optimizer, start_factor=0.01, total_iters=args.warmup_period
     )
 
     scheduler = SequentialLR(
         optimizer,
         schedulers=[warmup_scheduler, main_scheduler],
-        milestones=[args.warmup_period]
+        milestones=[args.warmup_period],
     )
 
     if args.resume:
@@ -150,35 +153,40 @@ def main_worker(gpu, ngpus_per_node, args):
         train(train_loader, model, criterion, optimizer, scheduler, epoch, device, args)
 
         acc1 = validate(val_loader, model, criterion, args)
-        
+
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
 
-        if not args.multiprocessing_distributed or (args.multiprocessing_distributed
-                and args.rank % ngpus_per_node == 0):
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'best_acc1': best_acc1,
-                'optimizer' : optimizer.state_dict(),
-                'scheduler' : scheduler.state_dict()
-            }, is_best)
+        if not args.multiprocessing_distributed or (
+            args.multiprocessing_distributed and args.rank % ngpus_per_node == 0
+        ):
+            save_checkpoint(
+                {
+                    "epoch": epoch + 1,
+                    "arch": args.arch,
+                    "state_dict": model.state_dict(),
+                    "best_acc1": best_acc1,
+                    "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict(),
+                },
+                is_best,
+            )
 
 
 def train(train_loader, model, criterion, optimizer, scheduler, epoch, device, args):
-    
+
     use_accel = not args.no_accel and torch.accelerator.is_available()
 
-    batch_time = AverageMeter('Time', use_accel, ':6.3f', Summary.NONE)
-    data_time = AverageMeter('Data', use_accel, ':6.3f', Summary.NONE)
-    losses = AverageMeter('Loss', use_accel, ':.4e', Summary.NONE)
-    top1 = AverageMeter('Acc@1', use_accel, ':6.2f', Summary.NONE)
-    top5 = AverageMeter('Acc@5', use_accel, ':6.2f', Summary.NONE)
+    batch_time = AverageMeter("Time", use_accel, ":6.3f", Summary.NONE)
+    data_time = AverageMeter("Data", use_accel, ":6.3f", Summary.NONE)
+    losses = AverageMeter("Loss", use_accel, ":.4e", Summary.NONE)
+    top1 = AverageMeter("Acc@1", use_accel, ":6.2f", Summary.NONE)
+    top5 = AverageMeter("Acc@5", use_accel, ":6.2f", Summary.NONE)
     progress = ProgressMeter(
         len(train_loader),
         [batch_time, data_time, losses, top1, top5],
-        prefix="Epoch: [{}]".format(epoch))
+        prefix="Epoch: [{}]".format(epoch),
+    )
 
     model.train()
 
@@ -230,7 +238,7 @@ def validate(val_loader, model, criterion, args):
             for i, (images, target) in enumerate(loader):
                 i = base_progress + i
                 if use_accel:
-                    if args.gpu is not None and device.type=='cuda':
+                    if args.gpu is not None and device.type == "cuda":
                         torch.accelerator.set_device_index(args.gpu)
                         images = images.cuda(args.gpu, non_blocking=True)
                         target = target.cuda(args.gpu, non_blocking=True)
@@ -252,14 +260,19 @@ def validate(val_loader, model, criterion, args):
                 if i % args.print_freq == 0:
                     progress.display(i + 1)
 
-    batch_time = AverageMeter('Time', use_accel, ':6.3f', Summary.NONE)
-    losses = AverageMeter('Loss', use_accel, ':.4e', Summary.NONE)
-    top1 = AverageMeter('Acc@1', use_accel, ':6.2f', Summary.AVERAGE)
-    top5 = AverageMeter('Acc@5', use_accel, ':6.2f', Summary.AVERAGE)
+    batch_time = AverageMeter("Time", use_accel, ":6.3f", Summary.NONE)
+    losses = AverageMeter("Loss", use_accel, ":.4e", Summary.NONE)
+    top1 = AverageMeter("Acc@1", use_accel, ":6.2f", Summary.AVERAGE)
+    top5 = AverageMeter("Acc@5", use_accel, ":6.2f", Summary.AVERAGE)
     progress = ProgressMeter(
-        len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
+        len(val_loader)
+        + (
+            args.distributed
+            and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))
+        ),
         [batch_time, losses, top1, top5],
-        prefix='Test: ')
+        prefix="Test: ",
+    )
 
     model.eval()
 
@@ -268,12 +281,20 @@ def validate(val_loader, model, criterion, args):
         top1.all_reduce()
         top5.all_reduce()
 
-    if args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset)):
-        aux_val_dataset = Subset(val_loader.dataset,
-                                 range(len(val_loader.sampler) * args.world_size, len(val_loader.dataset)))
+    if args.distributed and (
+        len(val_loader.sampler) * args.world_size < len(val_loader.dataset)
+    ):
+        aux_val_dataset = Subset(
+            val_loader.dataset,
+            range(len(val_loader.sampler) * args.world_size, len(val_loader.dataset)),
+        )
         aux_val_loader = torch.utils.data.DataLoader(
-            aux_val_dataset, batch_size=args.batch_size, shuffle=False,
-            num_workers=args.workers, pin_memory=True)
+            aux_val_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=args.workers,
+            pin_memory=True,
+        )
         run_validate(aux_val_loader, len(val_loader))
 
     progress.display_summary()
@@ -281,6 +302,6 @@ def validate(val_loader, model, criterion, args):
     return top1.avg
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     args = build_config()
     main(args)

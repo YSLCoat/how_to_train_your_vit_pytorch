@@ -9,32 +9,38 @@ from metrics import accuracy
 
 import torch
 from torch.utils.data import Subset
-from utils.training_utils import (
-    save_checkpoint,
-    AverageMeter,
-    ProgressMeter,
-    Summary
-)
+from utils.training_utils import save_checkpoint, AverageMeter, ProgressMeter, Summary
 
-class ImageNet1kClassificationTrainer():
+
+class ImageNet1kClassificationTrainer:
     def __init__(self, args, model, device):
         self.args = args
         self.schedulers = []
         self.device = device
         self.model = model
 
-    def train_epoch(self, train_loader: torch.utils.data.DataLoader, model: torch.nn.Module, criterion: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler, epoch: int, args: argparse.ArgumentParser):
+    def train_epoch(
+        self,
+        train_loader: torch.utils.data.DataLoader,
+        model: torch.nn.Module,
+        criterion: torch.nn.Module,
+        optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler,
+        epoch: int,
+        args: argparse.ArgumentParser,
+    ):
         use_accel = not args.no_accel and torch.accelerator.is_available()
 
-        batch_time = AverageMeter('Time', use_accel, ':6.3f', Summary.NONE)
-        data_time = AverageMeter('Data', use_accel, ':6.3f', Summary.NONE)
-        losses = AverageMeter('Loss', use_accel, ':.4e', Summary.NONE)
-        top1 = AverageMeter('Acc@1', use_accel, ':6.2f', Summary.NONE)
-        top5 = AverageMeter('Acc@5', use_accel, ':6.2f', Summary.NONE)
+        batch_time = AverageMeter("Time", use_accel, ":6.3f", Summary.NONE)
+        data_time = AverageMeter("Data", use_accel, ":6.3f", Summary.NONE)
+        losses = AverageMeter("Loss", use_accel, ":.4e", Summary.NONE)
+        top1 = AverageMeter("Acc@1", use_accel, ":6.2f", Summary.NONE)
+        top5 = AverageMeter("Acc@5", use_accel, ":6.2f", Summary.NONE)
         progress = ProgressMeter(
             len(train_loader),
             [batch_time, data_time, losses, top1, top5],
-            prefix="Epoch: [{}]".format(epoch))
+            prefix="Epoch: [{}]".format(epoch),
+        )
 
         model.train()
 
@@ -68,12 +74,16 @@ class ImageNet1kClassificationTrainer():
             if i % args.print_freq == 0:
                 progress.display(i + 1)
 
-
     def add_scheduler(self, scheduler):
         self.schedulers.append(scheduler)
 
-
-    def validate(self, val_loader: torch.utils.data.DataLoader, model: torch.nn.Module, criterion: torch.nn.Module, args: argparse.ArgumentParser):
+    def validate(
+        self,
+        val_loader: torch.utils.data.DataLoader,
+        model: torch.nn.Module,
+        criterion: torch.nn.Module,
+        args: argparse.ArgumentParser,
+    ):
         use_accel = not args.no_accel and torch.accelerator.is_available()
 
         def run_validate(loader, base_progress=0):
@@ -88,7 +98,7 @@ class ImageNet1kClassificationTrainer():
                 for i, (images, target) in enumerate(loader):
                     i = base_progress + i
                     if use_accel:
-                        if args.gpu is not None and device.type=='cuda':
+                        if args.gpu is not None and device.type == "cuda":
                             torch.accelerator.set_device_index(args.gpu)
                             images = images.cuda(args.gpu, non_blocking=True)
                             target = target.cuda(args.gpu, non_blocking=True)
@@ -110,14 +120,21 @@ class ImageNet1kClassificationTrainer():
                     if i % args.print_freq == 0:
                         progress.display(i + 1)
 
-        batch_time = AverageMeter('Time', use_accel, ':6.3f', Summary.NONE)
-        losses = AverageMeter('Loss', use_accel, ':.4e', Summary.NONE)
-        top1 = AverageMeter('Acc@1', use_accel, ':6.2f', Summary.AVERAGE)
-        top5 = AverageMeter('Acc@5', use_accel, ':6.2f', Summary.AVERAGE)
+        batch_time = AverageMeter("Time", use_accel, ":6.3f", Summary.NONE)
+        losses = AverageMeter("Loss", use_accel, ":.4e", Summary.NONE)
+        top1 = AverageMeter("Acc@1", use_accel, ":6.2f", Summary.AVERAGE)
+        top5 = AverageMeter("Acc@5", use_accel, ":6.2f", Summary.AVERAGE)
         progress = ProgressMeter(
-            len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
+            len(val_loader)
+            + (
+                args.distributed
+                and (
+                    len(val_loader.sampler) * args.world_size < len(val_loader.dataset)
+                )
+            ),
             [batch_time, losses, top1, top5],
-            prefix='Test: ')
+            prefix="Test: ",
+        )
 
         model.eval()
 
@@ -127,40 +144,64 @@ class ImageNet1kClassificationTrainer():
             top1.all_reduce()
             top5.all_reduce()
 
-        if args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset)):
-            aux_val_dataset = Subset(val_loader.dataset,
-                                    range(len(val_loader.sampler) * args.world_size, len(val_loader.dataset)))
+        if args.distributed and (
+            len(val_loader.sampler) * args.world_size < len(val_loader.dataset)
+        ):
+            aux_val_dataset = Subset(
+                val_loader.dataset,
+                range(
+                    len(val_loader.sampler) * args.world_size, len(val_loader.dataset)
+                ),
+            )
             aux_val_loader = torch.utils.data.DataLoader(
-                aux_val_dataset, batch_size=args.batch_size, shuffle=False,
-                num_workers=args.workers, pin_memory=True)
+                aux_val_dataset,
+                batch_size=args.batch_size,
+                shuffle=False,
+                num_workers=args.workers,
+                pin_memory=True,
+            )
             run_validate(aux_val_loader, len(val_loader))
 
         progress.display_summary()
 
         return top1.avg
-    
+
     def train(self):
         for epoch in range(self.args.start_epoch, self.args.epochs):
             if self.args.distributed:
                 self.train_sampler.set_epoch(epoch)
 
-            self.train_epoch(self.train_loader, self.model, self.criterion, self.optimizer, self.scheduler, self.epoch, self.device, self.args)
+            self.train_epoch(
+                self.train_loader,
+                self.model,
+                self.criterion,
+                self.optimizer,
+                self.scheduler,
+                self.epoch,
+                self.device,
+                self.args,
+            )
 
             acc1 = self.validate(self.val_loader, self.model, self.criterion, self.args)
-            
+
             is_best = acc1 > best_acc1
             best_acc1 = max(acc1, best_acc1)
 
-            if not self.args.multiprocessing_distributed or (self.args.multiprocessing_distributed
-                    and self.args.rank % self.ngpus_per_node == 0):
-                save_checkpoint({
-                    'epoch': epoch + 1,
-                    'arch': self.args.arch,
-                    'state_dict': self.model.state_dict(),
-                    'best_acc1': best_acc1,
-                    'optimizer' : self.optimizer.state_dict(),
-                    'scheduler' : self.scheduler.state_dict()
-                }, is_best)
+            if not self.args.multiprocessing_distributed or (
+                self.args.multiprocessing_distributed
+                and self.args.rank % self.ngpus_per_node == 0
+            ):
+                save_checkpoint(
+                    {
+                        "epoch": epoch + 1,
+                        "arch": self.args.arch,
+                        "state_dict": self.model.state_dict(),
+                        "best_acc1": best_acc1,
+                        "optimizer": self.optimizer.state_dict(),
+                        "scheduler": self.scheduler.state_dict(),
+                    },
+                    is_best,
+                )
 
     def load_model_checkpoint(self):
         if os.path.isfile(self.args.resume):
@@ -168,16 +209,19 @@ class ImageNet1kClassificationTrainer():
             if self.args.gpu is None:
                 checkpoint = torch.load(self.args.resume)
             else:
-                loc = f'{self.device.type}:{self.args.gpu}'
+                loc = f"{self.device.type}:{self.args.gpu}"
                 checkpoint = torch.load(self.args.resume, map_location=loc)
-            self.args.start_epoch = checkpoint['epoch']
-            best_acc1 = checkpoint['best_acc1']
+            self.args.start_epoch = checkpoint["epoch"]
+            best_acc1 = checkpoint["best_acc1"]
             if self.args.gpu is not None:
                 best_acc1 = best_acc1.to(self.args.gpu)
-            self.model.load_state_dict(checkpoint['state_dict'])
-            self.optimizer.load_state_dict(checkpoint['optimizer'])
-            self.scheduler.load_state_dict(checkpoint['scheduler'])
-            logging.info("=> loaded checkpoint '{}' (epoch {})"
-                  .format(self.args.resume, checkpoint['epoch']))
+            self.model.load_state_dict(checkpoint["state_dict"])
+            self.optimizer.load_state_dict(checkpoint["optimizer"])
+            self.scheduler.load_state_dict(checkpoint["scheduler"])
+            logging.info(
+                "=> loaded checkpoint '{}' (epoch {})".format(
+                    self.args.resume, checkpoint["epoch"]
+                )
+            )
         else:
             logging.info("=> no checkpoint found at '{}'".format(self.args.resume))
