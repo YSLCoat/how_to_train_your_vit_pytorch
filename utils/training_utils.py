@@ -98,7 +98,7 @@ def load_checkpoint(args, device, model, optimizer, scheduler) -> None:
     if os.path.isfile(args.resume):
         logging.info("=> loading checkpoint '{}'".format(args.resume))
         if args.gpu is None:
-            checkpoint = torch.load(args.resume)
+            checkpoint = torch.load(args.resume, weights_only=False)
         else:
             loc = f"{device.type}:{args.gpu}"
             checkpoint = torch.load(args.resume, map_location=loc)
