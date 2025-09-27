@@ -22,7 +22,6 @@ from utils.training_utils import (
 from model_utils import configure_multi_gpu_model
 from utils.data_utils import build_data_loaders
 from input_parser import build_config
-from metrics import accuracy
 from metrics_utils import MetricsEngine
 from models import create_model
 
@@ -152,7 +151,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
         train(train_loader, model, criterion, optimizer, scheduler, metrics_engine, epoch, device, args)
 
-        acc1 = validate(val_loader, model, criterion, args)
+        acc1 = validate(val_loader, model, criterion, metrics_engine, args)
 
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
@@ -174,6 +173,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
 
 def train(train_loader, model, criterion, optimizer, scheduler, metrics_engine, epoch, device, args):
+    metrics_engine.set_mode("train")
     metrics_engine.reset_metrics()
     metrics_engine.configure_progress_meter(len(train_loader), epoch)
 
@@ -209,7 +209,10 @@ def train(train_loader, model, criterion, optimizer, scheduler, metrics_engine, 
             metrics_engine.progress.display(i + 1)
 
 
-def validate(val_loader, model, criterion, args):
+def validate(val_loader, model, criterion, metrics_engine, args, epoch=None):
+    metrics_engine.set_mode("validate")
+    metrics_engine.reset_metrics()
+    metrics_engine.configure_progress_meter(len(val_loader) + (args.distributedand (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))), epoch)
 
     use_accel = not args.no_accel and torch.accelerator.is_available()
 
@@ -236,37 +239,21 @@ def validate(val_loader, model, criterion, args):
                 output = model(images)
                 loss = criterion(output, target)
 
-                acc1, acc5 = accuracy(output, target, topk=(1, 5))
-                losses.update(loss.item(), images.size(0))
-                top1.update(acc1[0], images.size(0))
-                top5.update(acc5[0], images.size(0))
+                metrics_engine.calculate_task_spesific_metrics(output, target)
+                metrics_engine.losses.update(loss.item(), images.size(0))
+                metrics_engine.batch_time.update(time.time() - end)
 
-                batch_time.update(time.time() - end)
                 end = time.time()
 
                 if i % args.print_freq == 0:
-                    progress.display(i + 1)
-
-    batch_time = AverageMeter("Time", use_accel, ":6.3f", Summary.NONE)
-    losses = AverageMeter("Loss", use_accel, ":.4e", Summary.NONE)
-    top1 = AverageMeter("Acc@1", use_accel, ":6.2f", Summary.AVERAGE)
-    top5 = AverageMeter("Acc@5", use_accel, ":6.2f", Summary.AVERAGE)
-    progress = ProgressMeter(
-        len(val_loader)
-        + (
-            args.distributed
-            and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))
-        ),
-        [batch_time, losses, top1, top5],
-        prefix="Test: ",
-    )
+                    metrics_engine.progress.display(i + 1)
 
     model.eval()
 
     run_validate(val_loader)
     if args.distributed:
-        top1.all_reduce()
-        top5.all_reduce()
+        metrics_engine.top1.all_reduce()
+        metrics_engine.top5.all_reduce()
 
     if args.distributed and (
         len(val_loader.sampler) * args.world_size < len(val_loader.dataset)
@@ -284,9 +271,9 @@ def validate(val_loader, model, criterion, args):
         )
         run_validate(aux_val_loader, len(val_loader))
 
-    progress.display_summary()
+    metrics_engine.progress.display_summary()
 
-    return top1.avg
+    return metrics_engine.top1.avg
 
 
 if __name__ == "__main__":

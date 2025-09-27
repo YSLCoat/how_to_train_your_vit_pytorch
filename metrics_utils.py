@@ -88,19 +88,35 @@ class ProgressMeter(object):
 
 
 class MetricsEngine():
-    def __init__(self, use_accel):
+    def __init__(self, use_accel, args=None):
         self.batch_time = AverageMeter("Time", use_accel, ":6.3f", Summary.NONE)
         self.data_time = AverageMeter("Data", use_accel, ":6.3f", Summary.NONE)
         self.losses = AverageMeter("Loss", use_accel, ":.4e", Summary.NONE)
         self.top1 = AverageMeter("Acc@1", use_accel, ":6.2f", Summary.NONE)
         self.top5 = AverageMeter("Acc@5", use_accel, ":6.2f", Summary.NONE)
 
-    def configure_progress_meter(self, n_samples, epoch):
+    def configure_progress_meter(self, n_samples, epoch=None, mode=None):
+        if mode == "train":
+            prefix = "Training Epoch: [{}]".format(epoch)
+        elif mode == "validate":
+            prefix = "Validate Epoch: [{}]".format(epoch)
+        else: 
+            prefix = "Test: "
+
         self.progress = ProgressMeter(
             n_samples,
             [self.batch_time, self.data_time, self.losses, self.top1, self.top5],
-            prefix="Epoch: [{}]".format(epoch),
+            prefix=prefix,
         )
+
+    def set_mode(self, mode):
+        self.mode = mode
+        if mode == 'train':
+            self.top1.summary_type=Summary.NONE
+            self.top5.summary_type=Summary.NONE
+        elif mode == 'validate':
+            self.top1.summary_type=Summary.AVERAGE
+            self.top5.summary_type=Summary.AVERAGE
 
     def reset_metrics(self):
         self.batch_time.reset()
@@ -113,3 +129,9 @@ class MetricsEngine():
         acc1, acc5 = accuracy(model_predictions, targets, topk=(1, 5))
         self.top1.update(acc1[0], model_predictions.size(0))
         self.top5.update(acc5[0], model_predictions.size(0))
+
+    def enable_logging(self):
+        raise NotImplemented
+    
+    def load_logging_checkpoint(self):
+        raise NotImplemented
