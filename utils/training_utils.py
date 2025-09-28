@@ -1,16 +1,18 @@
 import shutil
 import os
 import logging
+import pathlib
 from enum import Enum
 
 import torch
 import torch.distributed as dist
 
 
-def save_checkpoint(state, is_best, filename="checkpoint.pth.tar"):
-    torch.save(state, filename)
+def save_checkpoint(state, is_best, path, filename="checkpoint.pth.tar"):
+    path.mkdir(parents=True, exist_ok=True)
+    torch.save(state, pathlib.Path(path, filename))
     if is_best:
-        shutil.copyfile(filename, "model_best.pth.tar")
+        shutil.copyfile(pathlib.Path(path, filename), pathlib.Path(path, "model_best.pth.tar"))
 
 
 class Summary(Enum):

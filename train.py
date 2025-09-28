@@ -3,6 +3,8 @@ import random
 import time
 import warnings
 import logging
+import pathlib
+from datetime import datetime
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -83,6 +85,9 @@ def main(args):
 
 
 def main_worker(gpu, ngpus_per_node, args):
+    # TODO: Improve implementation of training_id generation.
+    unique_training_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    folder_name = f"{args.arch}_{unique_training_id}"
     global best_acc1
     args.gpu = gpu
 
@@ -170,6 +175,7 @@ def main_worker(gpu, ngpus_per_node, args):
                     "scheduler": scheduler.state_dict(),
                 },
                 is_best,
+                pathlib.Path(args.output_parent_dir, folder_name)
             )
 
 

@@ -1,4 +1,5 @@
 import argparse
+import pathlib
 
 from models import MODEL_REGISTRY
 
@@ -88,6 +89,13 @@ def build_config():
         type=int,
         metavar="N",
         help="print frequency (default: 10)",
+    )
+    parser.add_argument(
+        "-o",
+        "--output_parent_dir",
+        required=True,
+        type=pathlib.Path,
+        help="parent dir for storage of trained models and other training artifacts.",
     )
     parser.add_argument(
         "--resume",
