@@ -15,7 +15,7 @@ def save_checkpoint(state, is_best, path, filename="checkpoint.pth.tar"):
         shutil.copyfile(pathlib.Path(path, filename), pathlib.Path(path, "model_best.pth.tar"))
 
 
-def load_checkpoint(args, device, model, optimizer, scheduler) -> None:
+def load_checkpoint(args, device, model, optimizer, scheduler, metrics_engine) -> None:
     if os.path.isfile(args.resume):
         logging.info("=> loading checkpoint '{}'".format(args.resume))
         if args.gpu is None:
@@ -30,6 +30,8 @@ def load_checkpoint(args, device, model, optimizer, scheduler) -> None:
         model.load_state_dict(checkpoint["state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         scheduler.load_state_dict(checkpoint["scheduler"])
+        metrics_engine.batch_history = checkpoint["batch_history"]
+        metrics_engine.epoch_history = checkpoint["epoch_history"]
         logging.info(
             "=> loaded checkpoint '{}' (epoch {})".format(
                 args.resume, checkpoint["epoch"]

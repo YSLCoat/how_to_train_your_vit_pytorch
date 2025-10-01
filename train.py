@@ -144,7 +144,7 @@ def main_worker(gpu, ngpus_per_node, args):
     metrics_engine = MetricsEngine(use_accel)
 
     if args.resume:
-        load_checkpoint(args, device, model, optimizer, scheduler)
+        load_checkpoint(args, device, model, optimizer, scheduler, metrics_engine)
 
     if args.evaluate:
         validate(val_loader, model, criterion, args)
@@ -155,8 +155,10 @@ def main_worker(gpu, ngpus_per_node, args):
             train_sampler.set_epoch(epoch)
 
         train(train_loader, model, criterion, optimizer, scheduler, metrics_engine, epoch, device, args)
+        metrics_engine.update_epoch()
 
-        acc1 = validate(val_loader, model, criterion, metrics_engine, args)
+        acc1 = validate(val_loader, model, criterion, metrics_engine, args, epoch)
+        metrics_engine.update_epoch()
 
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
@@ -172,6 +174,8 @@ def main_worker(gpu, ngpus_per_node, args):
                     "best_acc1": best_acc1,
                     "optimizer": optimizer.state_dict(),
                     "scheduler": scheduler.state_dict(),
+                    "batch_history": metrics_engine.batch_history,
+                    "epoch_history": metrics_engine.epoch_history,
                 },
                 is_best,
                 pathlib.Path(args.output_parent_dir, folder_name)
@@ -187,7 +191,7 @@ def train(train_loader, model, criterion, optimizer, scheduler, metrics_engine, 
 
     end = time.time()
     for i, (images, target) in enumerate(train_loader):
-        metrics_engine.data_time.update(time.time() - end)
+        data_time = time.time() - end
 
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
@@ -199,16 +203,12 @@ def train(train_loader, model, criterion, optimizer, scheduler, metrics_engine, 
         if args.mixup:
             target = target.argmax(dim=1)
 
-        metrics_engine.calculate_task_spesific_metrics(output, target)
-        metrics_engine.losses.update(loss.item(), images.size(0))
-
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         scheduler.step()
-
-        metrics_engine.batch_time.update(time.time() - end)
+        metrics_engine.update_batch(data_time, loss.item(), time.time() - end, output, target)
         end = time.time()
 
         if i % args.print_freq == 0:
@@ -218,7 +218,7 @@ def train(train_loader, model, criterion, optimizer, scheduler, metrics_engine, 
 def validate(val_loader, model, criterion, metrics_engine, args, epoch=None):
     metrics_engine.set_mode("validate")
     metrics_engine.reset_metrics()
-    metrics_engine.configure_progress_meter(len(val_loader) + (args.distributedand (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))), epoch)
+    metrics_engine.configure_progress_meter(len(val_loader) + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))), epoch)
 
     use_accel = not args.no_accel and torch.accelerator.is_available()
 
@@ -232,6 +232,7 @@ def validate(val_loader, model, criterion, metrics_engine, args, epoch=None):
         with torch.no_grad():
             end = time.time()
             for i, (images, target) in enumerate(loader):
+                data_time = time.time() - end
                 i = base_progress + i
                 if use_accel:
                     if args.gpu is not None and device.type == "cuda":
@@ -245,9 +246,7 @@ def validate(val_loader, model, criterion, metrics_engine, args, epoch=None):
                 output = model(images)
                 loss = criterion(output, target)
 
-                metrics_engine.calculate_task_spesific_metrics(output, target)
-                metrics_engine.losses.update(loss.item(), images.size(0))
-                metrics_engine.batch_time.update(time.time() - end)
+                metrics_engine.update_batch(data_time, loss.item(), time.time() - end, output, target)
 
                 end = time.time()
 
