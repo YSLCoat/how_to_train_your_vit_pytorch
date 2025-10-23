@@ -8,16 +8,16 @@ from vit_pytorch import ViT as LucidrainViTBase
 
 
 class LucidrainViT(LucidrainViTBase):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, learning_tasks, *args, **kwargs):
+        LucidrainViTBase.__init__(self, *args, **kwargs)
         
         self.mlp_heads = nn.ModuleDict({})
         self.mlp_head = nn.Identity() # Overwrite the original self.mlp_head in the ViT. Use nn.Identity instead of None just incase some pytorch logic wants modules at not None.
 
-        self.learning_task_list = kwargs.pop('learning_tasks')
+        self.learning_task_list = learning_tasks
 
         for learning_task in self.learning_task_list:
-            self.mlp_heads.update(learning_task.name, nn.Linear(self.dim, learning_task.output_layer_shape))
+            self.mlp_heads.update({learning_task.name: nn.Linear(kwargs['dim'], learning_task.output_layer_shape)})
 
     def forward(self, img):
         x = self.to_patch_embedding(img)

@@ -89,7 +89,7 @@ class ProgressMeter(object):
 
 
 class MetricsEngine:
-    def __init__(self, use_accel):
+    def __init__(self, use_accel, args):
         self.batch_time = AverageMeter("Time", use_accel, ":6.3f", Summary.NONE)
         self.data_time = AverageMeter("Data", use_accel, ":6.3f", Summary.NONE)
         self.losses = AverageMeter("Loss", use_accel, ":.4e", Summary.NONE)

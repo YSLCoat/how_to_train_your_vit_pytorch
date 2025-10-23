@@ -14,7 +14,7 @@ MODEL_REGISTRY = {
 
 
 def create_model(args):
-    learning_tasks_list = create_learning_tasks(args.learning_tasks)
+    learning_tasks_list = create_learning_tasks(args.learning_tasks.copy())
     model_constructor = MODEL_REGISTRY.get(args.arch)
 
     if not model_constructor:
@@ -22,6 +22,7 @@ def create_model(args):
 
     if args.arch == "lucidrain_vit":
         model = model_constructor(
+            learning_tasks=learning_tasks_list,
             image_size=args.image_size,
             patch_size=args.patch_size,
             num_classes=args.num_classes,
@@ -31,7 +32,6 @@ def create_model(args):
             mlp_dim=args.mlp_dim,
             dropout=args.dropout,
             emb_dropout=args.emb_dropout,
-            learning_tasks=learning_tasks_list,
         )
     else:
         model = model_constructor(pretrained=args.pretrained)
@@ -104,7 +104,7 @@ class ObjectDetectionLearningTask(LearningTask):
 
 TASK_REGISTRY = {
     "classification": ClassificationLearningTask,
-    # "object_detection": ObjectDetectionLearningTask,
+    "object_detection": ObjectDetectionLearningTask,
     # "semantic_segmentation": SemanticSegmentationLearningTask,
     # "instance_segmentation": InstanceSegmentationLearningTask,
 }
@@ -113,7 +113,7 @@ TASK_REGISTRY = {
 def create_learning_tasks(task_configs: list[dict]) -> list[LearningTask]:
     tasks = []
     for task_config in task_configs:
-        task_type = task_config.pop("type")
+        task_type = task_config.pop("learning_task")
         TaskClass = TASK_REGISTRY.get(task_type)
         if not TaskClass:
             raise ValueError(f"Task type '{task_type}' not supported. Supported learning tasks: {TASK_REGISTRY.keys()}.")

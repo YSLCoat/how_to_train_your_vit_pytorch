@@ -10,7 +10,6 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.multiprocessing as mp
-import torch.nn as nn
 import torch.optim
 import torch.utils.data
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
@@ -110,6 +109,10 @@ def main_worker(gpu, ngpus_per_node, args):
             rank=args.rank,
         )
 
+    train_loader, val_loader, train_sampler, _ = build_data_loaders(args)
+
+    metrics_engine = MetricsEngine(use_accel, args)
+
     logging.info("=> creating model '{}'".format(args.arch))
     model = create_model(args)
 
@@ -118,11 +121,9 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         configure_multi_gpu_model(args, model, device, ngpus_per_node)
 
-    train_loader, val_loader, train_sampler, _ = build_data_loaders(args)
-
     criterion = {
         task.name: task.create_criterion().to(device) 
-        for task in model.learning_tasks_list
+        for task in model.learning_task_list
     }
 
     total_steps = len(train_loader) * args.epochs
@@ -144,8 +145,6 @@ def main_worker(gpu, ngpus_per_node, args):
         schedulers=[warmup_scheduler, main_scheduler],
         milestones=[args.warmup_period],
     )
-
-    metrics_engine = MetricsEngine(use_accel)
 
     if args.resume:
         load_checkpoint(args, device, model, optimizer, scheduler, metrics_engine)
@@ -197,16 +196,16 @@ def main_worker(gpu, ngpus_per_node, args):
 
 
 def train(
-    train_loader,
-    model,
-    criterion,
-    optimizer,
-    scheduler,
+    train_loader: torch.utils.data.DataLoader,
+    model: torch.nn.Module,
+    criterion: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler,
     metrics_engine,
-    epoch,
-    device,
+    epoch: int,
+    device: torch.device,
     args,
-):
+) -> None:
     metrics_engine.set_mode("train")
     metrics_engine.reset_metrics()
     metrics_engine.configure_progress_meter(len(train_loader), epoch)
@@ -214,26 +213,38 @@ def train(
     model.train()
 
     end = time.time()
-    for i, (images, target) in enumerate(train_loader):
+    for i, (images, target_dict) in enumerate(train_loader):
         data_time = time.time() - end
 
         images = images.to(device, non_blocking=True)
-        target = target.to(device, non_blocking=True)
+        target = {
+            name: target.to(device, non_blocking=True) 
+            for name, target in target_dict.items()
+        }
 
-        output = model(images)
-        loss = criterion(output, target)
+        assert 0, target
+
+        output_dict = model(images)
+        total_loss = 0
+        loss_dict = {}
+        for task_name, output in output_dict.items():
+            task_target = target[task_name]
+            task_loss = criterion[task_name](output, task_target)
+            loss_dict[task_name] = task_loss.item()
+            
+            total_loss += task_loss
 
         # select dominant label for accuracy calculation when using mixup
         if args.mixup:
             target = target.argmax(dim=1)
 
         optimizer.zero_grad()
-        loss.backward()
+        total_loss.backward()
         optimizer.step()
 
         scheduler.step()
         metrics_engine.update_batch(
-            data_time, loss.item(), time.time() - end, output, target
+            data_time, total_loss.item(), time.time() - end, output_dict, target_dict
         )
         end = time.time()
 
@@ -264,23 +275,36 @@ def validate(val_loader, model, criterion, metrics_engine, args, epoch=None):
 
         with torch.no_grad():
             end = time.time()
-            for i, (images, target) in enumerate(loader):
+            for i, (images, target_dict) in enumerate(loader):
                 data_time = time.time() - end
                 i = base_progress + i
                 if use_accel:
                     if args.gpu is not None and device.type == "cuda":
                         torch.accelerator.set_device_index(args.gpu)
-                        images = images.cuda(args.gpu, non_blocking=True)
-                        target = target.cuda(args.gpu, non_blocking=True)
+                        images = images.to(device, non_blocking=True)
+                        target = {
+                            name: target.to(device, non_blocking=True) 
+                            for name, target in target_dict.items()
+                        }
                     else:
                         images = images.to(device)
-                        target = target.to(device)
+                        target = {
+                            name: target.to(device) 
+                            for name, target in target_dict.items()
+                        }
 
-                output = model(images)
-                loss = criterion(output, target)
+                output_dict = model(images)
+                total_loss = 0
+                loss_dict = {}
+                for task_name, output in output_dict.items():
+                    task_target = target[task_name]
+                    task_loss = criterion[task_name](output, task_target)
+                    loss_dict[task_name] = task_loss.item()
+                    
+                    total_loss += task_loss
 
                 metrics_engine.update_batch(
-                    data_time, loss.item(), time.time() - end, output, target
+                    data_time, total_loss.item(), time.time() - end, output_dict, target_dict
                 )
 
                 end = time.time()

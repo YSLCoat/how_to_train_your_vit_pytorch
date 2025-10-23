@@ -2,14 +2,14 @@ import os
 import pathlib
 import logging
 from PIL import Image
-from typing import Tuple, Dict, List
+from typing import Tuple, List, Dict, Any, Set
 import xml.etree.ElementTree as ET
 
 import torch
 import torch.utils.data
 from torch.utils.data import Dataset, default_collate
 import torch.utils.data.distributed
-import torchvision
+from torchvision.tv_tensors import BoundingBoxes
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from torchvision.transforms import v2
@@ -40,18 +40,41 @@ class ImageNetDataset(Dataset):
 
     # img path: root folder -> Data -> CLS-LOC -> test/train/val -> class_folders -> filename.JPEG
     # annotation path: root folder -> Annotations -> CLS-LOC -> train/val -> class_folders -> filename.xml
+    
+    SUPPORTED_TASKS: Set[str] = {"classification", "object_detection"}
+
     def __init__(
         self,
         root_dir: str,
+        learning_tasks: List[Dict[str, Any]],
         partition: str = "train",
         transforms=None,
-        object_detection=False,
     ) -> None:
+        self.learning_tasks_config = learning_tasks
         self.img_dir = pathlib.Path(
-            os.path.join(root_dir, "ILSVRC", "Data", "CLS-LOC", partition)
+            os.path.join(root_dir, "ILSVRC", "Data", "CLS-LOC", partition) 
         )
-        self.object_detection = object_detection
-        if object_detection:
+
+        self.task_types = set()
+        self.tasks_by_name = {}
+        
+        for task_config in self.learning_tasks_config:
+            task_type = task_config['learning_task']
+            task_name = task_config['name']
+            
+            if task_type not in self.SUPPORTED_TASKS:
+                raise ValueError(
+                    f"Dataset {self.__class__.__name__} does not support task type '{task_type}'. "
+                    f"Supported tasks are: {self.SUPPORTED_TASKS}"
+                )
+            
+            if task_name in self.tasks_by_name:
+                raise ValueError(f"Duplicate task name '{task_name}' found. Task names must be unique.")
+                
+            self.task_types.add(task_type)
+            self.tasks_by_name[task_name] = task_config
+
+        if 'object_detection' in self.task_types:
             self.annotation_dir = pathlib.Path(
                 os.path.join(root_dir, "Annotations", "CLS-LOC", partition)
             )
@@ -62,12 +85,18 @@ class ImageNetDataset(Dataset):
 
             for path in self.annotation_paths:
                 path_parts = list(path.parts)
-                data_index = path_parts.index("Annotations")
-                path_parts[data_index] = "Data"
-                img_base_path = pathlib.Path(*path_parts)
-                self.img_paths.append(img_base_path.with_suffix(".JPEG"))
+                try:
+                    data_index = path_parts.index("Annotations")
+                    path_parts[data_index] = "Data"
+                    img_base_path = pathlib.Path(*path_parts)
+                    self.img_paths.append(img_base_path.with_suffix(".JPEG"))
+                except ValueError:
+                    print(f"Warning: Could not derive image path from annotation path: {path}")
         else:
-            self.img_paths = [f for f in self.img_dir.rglob("*") if f.suffix == ".JPEG"]
+            self.img_paths = [
+                f for f in self.img_dir.rglob("*") if f.suffix.lower() == ".jpeg"
+            ]
+            self.annotation_paths = None
 
         self.readable_classes_dict = extract_readable_imagenet_labels(
             os.path.join(root_dir, "LOC_synset_mapping.txt")
@@ -78,56 +107,108 @@ class ImageNetDataset(Dataset):
         )
 
     def load_image(self, index: int) -> Image.Image:
-        "Opens an image via a path and returns it."
         image_path = self.img_paths[index]
         return Image.open(image_path).convert("RGB")
 
-    def load_bounding_box_coords(self, index: int, img_size: Tuple) -> torch.Tensor:
+    def load_bounding_box_coords(self, index: int, img_size: Tuple) -> BoundingBoxes:
+        if self.annotation_paths is None:
+            raise RuntimeError("Called load_bounding_box_coords but no annotation paths were loaded.")
+            
         annotation_path = self.annotation_paths[index]
         tree = ET.parse(annotation_path)
         root = tree.getroot()
-        bndbox = root.find(".//bndbox")
-        xmin = int(bndbox.find("xmin").text)
-        ymin = int(bndbox.find("ymin").text)
-        xmax = int(bndbox.find("xmax").text)
-        ymax = int(bndbox.find("ymax").text)
+        
+        boxes = []
+        for obj in root.findall("object"):
+            bndbox = obj.find("bndbox")
+            if bndbox:
+                xmin = int(bndbox.find("xmin").text)
+                ymin = int(bndbox.find("ymin").text)
+                xmax = int(bndbox.find("xmax").text)
+                ymax = int(bndbox.find("ymax").text)
+                boxes.append([xmin, ymin, xmax, ymax])
 
-        return torchvision.tv_tensors.BoundingBoxes(
-            [[xmin, ymin, xmax, ymax]], format="XYXY", canvas_size=img_size
+        if not boxes:
+            return BoundingBoxes(
+                [], format="XYXY", canvas_size=img_size
+            )
+
+        return BoundingBoxes(
+            boxes, format="XYXY", canvas_size=img_size
         )
 
     def __len__(self) -> int:
-        "Returns the total number of samples."
         return len(self.img_paths)
 
-    def __getitem__(self, index: int) -> Tuple[torch.Tensor, int]:
-        "Returns one sample of data, data and label (X, y)."
+    def __getitem__(self, index: int) -> Tuple[Any, Dict[str, Any]]:
         img = self.load_image(index)
+        
         class_name = self.img_paths[
             index
-        ].parent.name  # expects path in data_folder/class_name/image.jpeg
-        readable_class_name = self.readable_classes_dict[class_name]
+        ].parent.name
+        readable_class_name = self.readable_classes_dict.get(class_name, class_name)
         class_idx = self.class_to_idx[readable_class_name]
 
-        if self.object_detection:
+        target_dict = {}
+
+        if 'object_detection' not in self.task_types:            
+            for task_name, task_config in self.tasks_by_name.items():
+                if task_config['learning_task'] == 'classification':
+                    target_dict[task_name] = class_idx
+                    
+            if self.transforms:
+                img = self.transforms(img)
+                
+            return img, target_dict
+
+        else:
             H, W = img.height, img.width
             bndbox_coords_tensor = self.load_bounding_box_coords(index, (H, W))
+            
+            box_labels = torch.full((len(bndbox_coords_tensor),), 
+                                     class_idx, 
+                                     dtype=torch.int64)
+
+            for task_name, task_config in self.tasks_by_name.items():
+                task_type = task_config['learning_task']
+                
+                if task_type == 'classification':
+                    target_dict[task_name] = class_idx
+                    
+                elif task_type == 'object_detection':
+                    target_dict[task_name] = {
+                        'boxes': bndbox_coords_tensor,
+                        'labels': box_labels
+                    }
 
             if self.transforms:
-                return self.transforms(
-                    {
-                        "image": img,
-                        "boxes": bndbox_coords_tensor,
-                        "labels": torch.tensor([class_idx]),
-                    }
-                )
+                sample = {
+                    'image': img,
+                    'boxes': bndbox_coords_tensor,
+                    'labels': box_labels
+                }
+                
+                transformed_sample = self.transforms(sample)
+                transformed_img = transformed_sample['image']
+                
+                for task_name, task_config in self.tasks_by_name.items():
+                    if task_config['learning_task'] == 'object_detection':
+                        target_dict[task_name] = {
+                            'boxes': transformed_sample['boxes'],
+                            'labels': transformed_sample['labels']
+                        }
+                
+                return transformed_img, target_dict
+            
             else:
-                return img, bndbox_coords_tensor, class_idx
-        else:
-            if self.transforms:
-                return self.transforms(img), class_idx
-            else:
-                return img, class_idx
+                return img, target_dict
+            
+
+class FakeDataset(datasets.FakeData):
+    def __init__(self, *args, **kwargs):
+            # TODO: Add support for learning tasks for classification, obj detection, semantic and instance segmentation.
+            raise NotImplementedError
+    
 
 
 class MixUpCollator:
@@ -200,6 +281,7 @@ def build_data_loaders(args):
 
         train_dataset = ImageNetDataset(
             args.data,
+            args.learning_tasks,
             "train",
             transforms.Compose(
                 [
@@ -213,6 +295,7 @@ def build_data_loaders(args):
 
         val_dataset = ImageNetDataset(
             args.data,
+            args.learning_tasks,
             "val",
             transforms.Compose(
                 [
