@@ -204,7 +204,7 @@ def build_data_loaders(args):
             transforms.Compose(
                 [
                     transforms.Resize((224, 224)),
-                    transforms.RandAugment(),
+                    transforms.RandAugment(args.randaug_num_ops, args.randaug_magnitude),
                     transforms.ToTensor(),
                     normalize,
                 ]

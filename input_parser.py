@@ -200,6 +200,18 @@ def build_config():
         action="store_true",
         help="if specified applies mixup augmentation for inputs",
     )
+    parser.add_argument(
+        "--randaug_num_ops",
+        type=int,
+        default=2,
+        help="Number of augmentation techniques used by randaug"
+    )
+    parser.add_argument(
+        "--randaug_magnitude",
+        type=int,
+        default=9,
+        help="Magnitude paramter of randaug augmentations"
+    )
 
     args = parser.parse_args()
     return args
