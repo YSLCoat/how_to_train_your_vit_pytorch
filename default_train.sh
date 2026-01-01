@@ -1,5 +1,4 @@
 #!/bin/sh
-# This is a comment!
 n_epochs=90
 batch_size=256
 model_architecture="lucidrain_vit"
